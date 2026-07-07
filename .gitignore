@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+# generated demo capture (regenerate with tools/make_sample.py)
+sample_data/*.pcap
+
+# Claude Code (local tooling, not part of the project)
+CLAUDE.md
+.claude/

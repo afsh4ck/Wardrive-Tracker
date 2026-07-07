@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wardrive Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📡</span>
+      <div>
+        <h1>Wardrive Tracker</h1>
+        <p class="tagline">Geolocalización de redes WiFi y dispositivos Bluetooth desde PCAP</p>
+      </div>
+    </div>
+    <div class="actions">
+      <label class="btn btn-primary">
+        <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap" hidden>
+        Subir PCAP
+      </label>
+      <button class="btn" id="sampleBtn">Cargar ejemplo</button>
+      <button class="btn btn-osint" id="geowifiBtn" hidden
+              title="Geolocaliza los BSSIDs sin GPS en bases WiFi públicas (Apple). Datos OSINT, no un fix GPS.">
+        Geolocalizar BSSIDs (geowifi)
+      </button>
+    </div>
+  </header>
+
+  <div id="statsBar" class="stats hidden"></div>
+  <div id="banner" class="banner hidden"></div>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="tabs">
+        <button class="tab active" data-tab="wifi">
+          WiFi <span class="count" id="wifiCount">0</span>
+        </button>
+        <button class="tab" data-tab="bluetooth">
+          Bluetooth <span class="count" id="btCount">0</span>
+        </button>
+      </div>
+      <input type="search" id="filterInput" class="filter" placeholder="Filtrar por nombre, MAC, cifrado…">
+      <div id="list" class="list">
+        <div class="empty">Sube un PCAP o carga el ejemplo para empezar.</div>
+      </div>
+    </aside>
+
+    <section class="mapwrap">
+      <div id="map"></div>
+      <div id="detail" class="detail hidden"></div>
+      <div id="dropzone" class="dropzone">
+        <div class="dz-inner">
+          <div class="dz-icon">🛰️</div>
+          <h2>Arrastra un archivo PCAP aquí</h2>
+          <p>o usa <b>Subir PCAP</b>. ¿No tienes uno? Prueba <b>Cargar ejemplo</b>.</p>
+        </div>
+      </div>
+      <div id="loading" class="loading hidden"><div class="spinner"></div><span>Analizando captura…</span></div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
