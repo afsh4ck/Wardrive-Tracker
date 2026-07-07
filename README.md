@@ -126,7 +126,7 @@ BSSIDs con menos peticiones.
 Requiere **Python 3.11+**.
 
 ```bash
-git clone <este-repositorio>
+git clone https://github.com/afsh4ck/Wardrive-Tracker.git
 cd wardrive_tracker
 pip install -r requirements.txt
 ```
