@@ -4,6 +4,8 @@
 
 **Geolocaliza redes WiFi y dispositivos Bluetooth a partir de un archivo PCAP.**
 
+<img width="2560" height="1238" alt="image" src="https://github.com/user-attachments/assets/6cc34e7c-afbb-4523-ab01-8aad69433266" />
+
 Sube una captura → parseo de tramas 802.11 / BLE → mapa interactivo con panel de
 detalles, cifrado, fabricante y traza de avistamientos. Sin GPS en la captura,
 geolocaliza los BSSIDs por bases de datos WiFi públicas con la técnica de
