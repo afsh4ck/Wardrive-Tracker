@@ -8,11 +8,12 @@ each network/device.
 Run:  python app.py   ->   http://127.0.0.1:5000
 """
 
+import json
 import os
 import tempfile
 import traceback
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from wardrive import geowifi
 from wardrive.parser import analyze_pcap
@@ -101,6 +102,34 @@ def geolocate():
     except Exception as exc:  # pragma: no cover
         traceback.print_exc()
         return jsonify({"error": "Error en la geolocalización: %s" % exc}), 500
+
+
+@app.route("/api/geolocate_stream", methods=["POST"])
+def geolocate_stream():
+    """Como /api/geolocate pero **en streaming** (NDJSON): una línea JSON por
+    evento de progreso, para geolocalizar miles de BSSIDs con barra de progreso.
+
+    Una sola pasada en el backend => aprovecha al máximo el caché de vecinos de
+    Apple. Si el cliente corta la conexión (botón «detener»), el generador para.
+    """
+    payload = request.get_json(silent=True) or {}
+    bssids = payload.get("bssids")
+    if not isinstance(bssids, list) or not bssids:
+        return jsonify({"error": "No se han enviado BSSIDs."}), 400
+    bssids = [str(b).lower() for b in bssids if b][:5000]
+
+    def gen():
+        try:
+            for ev in geowifi.iter_locate_bssids(bssids):
+                yield json.dumps(ev) + "\n"
+        except GeneratorExit:  # el cliente cerró (detener): salir en silencio
+            raise
+        except Exception as exc:  # pragma: no cover
+            traceback.print_exc()
+            yield json.dumps({"error": str(exc)}) + "\n"
+
+    return Response(gen(), mimetype="application/x-ndjson",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
 @app.route("/api/sample")

@@ -33,14 +33,9 @@ const state = {
   trilatOn: false,       // triangulación por RSSI activada
   encFilter: new Set(),  // cifrados WiFi activos (vacío = todos)
   geowifiRunning: false, // hay una tanda de geowifi en curso
-  geowifiStop: false,    // petición de detener la tanda
+  geowifiStop: false,    // el usuario pidió detener
+  geowifiAbort: null,    // AbortController del stream en curso
 };
-
-// Tamaño de lote para geowifi: listas grandes (miles de redes) se trocean en
-// varias peticiones para no perder ninguna, mostrar progreso y poder detener
-// entre lotes. Pequeño para que cada petición vuelva pronto (el caché de vecinos
-// de Apple hace que muchas del lote se resuelvan sin consulta propia).
-const GEOWIFI_CHUNK = 150;
 
 const ENC_TYPES = ["Open", "WEP", "WPA", "WPA2", "WPA3"];
 
@@ -366,8 +361,11 @@ function select(addr, kind, fromList) {
     map.panTo([d.location.lat, d.location.lon]);
     const m = state.markers[addr];
     if (m) m.openPopup();
+    // interactive:false => el círculo/elipse no captura clics; así se pueden
+    // seleccionar otros marcadores que caigan dentro del radio de alcance.
     const style = { color: colorFor(d), weight: 1, opacity: .55,
-                    fillColor: colorFor(d), fillOpacity: .08, dashArray: "4,4" };
+                    fillColor: colorFor(d), fillOpacity: .08, dashArray: "4,4",
+                    interactive: false };
     const ell = d.location.ellipse;
     if (ell) {
       state.uncert = L.polygon(
@@ -379,7 +377,7 @@ function select(addr, kind, fromList) {
     }
     if (d.sightings && d.sightings.length > 1) {
       const pts = d.sightings.map(s => [s.lat, s.lon]);
-      state.track = L.polyline(pts, { color: colorFor(d), weight: 2, dashArray: "4,4", opacity: .7 }).addTo(map);
+      state.track = L.polyline(pts, { color: colorFor(d), weight: 2, dashArray: "4,4", opacity: .7, interactive: false }).addTo(map);
     }
   }
 }
@@ -521,10 +519,11 @@ function applyGeowifiResults(located) {
 
 async function runGeowifi() {
   const btn = document.getElementById("geowifiBtn");
-  // Segunda pulsación mientras corre => detener tras el lote actual.
+  // Segunda pulsación mientras corre => detener (cierra la conexión).
   if (state.geowifiRunning) {
     state.geowifiStop = true;
     btn.textContent = "Deteniendo…";
+    if (state.geowifiAbort) state.geowifiAbort.abort();
     return;
   }
 
@@ -533,76 +532,100 @@ async function runGeowifi() {
 
   state.geowifiRunning = true;
   state.geowifiStop = false;
-  let applied = 0, queried = 0, done = 0, provider = "apple";
-  const errors = [];
+  const ctrl = new AbortController();
+  state.geowifiAbort = ctrl;
+  let applied = 0, queried = 0, done = 0, provider = "apple", aborted = false;
+  let lastErrors = [];
   setGeowifiProgress(0, addrs.length, 0);
+  btn.textContent = `Consultando 0/${addrs.length}… ⏹ detener`;
 
   try {
-    for (let i = 0; i < addrs.length && !state.geowifiStop; i += GEOWIFI_CHUNK) {
-      const batch = addrs.slice(i, i + GEOWIFI_CHUNK);
-      btn.textContent = `Consultando ${done}/${addrs.length}… ⏹ detener`;
-      let json;
-      try {
-        const res = await fetch("/api/geolocate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ bssids: batch }),
-        });
-        json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Error en geowifi");
-      } catch (e) {
-        errors.push(e.message);
-        done += batch.length;
+    const res = await fetch("/api/geolocate_stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bssids: addrs }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || "Error en geowifi");
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let streamDone = false;
+    while (!streamDone) {
+      const { done: rd, value } = await reader.read();
+      if (rd) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.error) throw new Error(ev.error);
+
+        provider = ev.provider || provider;
+        queried = ev.queried ?? queried;
+        done = ev.done ?? done;
+        if (ev.errors && ev.errors.length) lastErrors = ev.errors;
+        const changed = applyGeowifiResults(ev.located || {});
+        applied += changed.length;
+        for (const d of changed) upsertMarker(d);   // incremental: solo lo nuevo
+
         setGeowifiProgress(done, addrs.length, applied);
-        if (!applied && errors.length >= 2) throw e;   // servicio caído: aborta
-        continue;                                       // fallo puntual: sigue
+        banner(`geowifi (${provider}): ${applied} redes situadas · ${done}/${addrs.length} `
+             + `procesados · ${queried} consultas…`, false);
+        if (ev.aborted) { aborted = true; streamDone = true; break; }
       }
-      provider = json.provider || provider;
-      queried += json.queried || 0;
-      if (json.errors && json.errors.length) errors.push(...json.errors);
-      const changed = applyGeowifiResults(json.located || {});
-      applied += changed.length;
-      done += batch.length;
-
-      // Actualización incremental: solo los marcadores que cambiaron (no se
-      // reconstruye el mapa entero ni la lista en cada lote — clave con miles
-      // de redes). La lista se refresca una vez al final.
-      for (const d of changed) upsertMarker(d);
-      recomputeLocated();
-      setGeowifiProgress(done, addrs.length, applied);
-      banner(`geowifi (${provider}): ${applied} redes situadas · ${done}/${addrs.length} `
-           + `BSSIDs procesados · ${queried} peticiones…`, false);
     }
-
-    renderList();
-    if (state.selected) select(state.selected, state.tab, true);
-    const coords = recomputeLocated();
-    if (applied && coords.length) {
-      const b = coords.reduce((a, c) => ({
-        mnla: Math.min(a.mnla, c[0]), mxla: Math.max(a.mxla, c[0]),
-        mnlo: Math.min(a.mnlo, c[1]), mxlo: Math.max(a.mxlo, c[1]),
-      }), { mnla: 90, mxla: -90, mnlo: 180, mxlo: -180 });
-      map.fitBounds([[b.mnla, b.mnlo], [b.mxla, b.mxlo]], { padding: [60, 60] });
-    }
-
-    const stopped = state.geowifiStop;
-    let msg = `geowifi (${provider}): ${applied} de ${addrs.length} redes situadas `
-            + `(${done} procesados, ${queried} peticiones${stopped ? ", detenido" : ""}). `
-            + `Ubicaciones OSINT, no fixes GPS. Muchas MAC no están en las bases públicas.`;
-    if (!applied) {
-      msg = `geowifi no encontró ubicación para ninguna de las ${addrs.length} redes `
-          + `(${queried} peticiones)`
-          + (errors.length ? `. El servicio pudo no estar accesible.` : `.`);
-    }
-    banner(msg, !applied);
   } catch (e) {
-    banner("geowifi: " + e.message, true);
-  } finally {
-    state.geowifiRunning = false;
-    state.geowifiStop = false;
-    hideGeowifiProgress();
-    updateGeowifiBtn();
+    if (e.name === "AbortError") {
+      aborted = true;   // detenido por el usuario, no es un fallo
+    } else {
+      banner("geowifi: " + e.message, true);
+      state.geowifiRunning = false;
+      state.geowifiStop = false;
+      state.geowifiAbort = null;
+      hideGeowifiProgress();
+      updateGeowifiBtn();
+      return;
+    }
   }
+
+  // cierre común (éxito, fin de servicio o detenido)
+  recomputeLocated();
+  renderList();
+  if (state.selected) select(state.selected, state.tab, true);
+  const coords = state.data ? [...state.data.wifi, ...state.data.bluetooth]
+    .filter(d => d.location).map(d => [d.location.lat, d.location.lon]) : [];
+  if (applied && coords.length && !state.geowifiStop) {
+    const b = coords.reduce((a, c) => ({
+      mnla: Math.min(a.mnla, c[0]), mxla: Math.max(a.mxla, c[0]),
+      mnlo: Math.min(a.mnlo, c[1]), mxlo: Math.max(a.mxlo, c[1]),
+    }), { mnla: 90, mxla: -90, mnlo: 180, mxlo: -180 });
+    map.fitBounds([[b.mnla, b.mnlo], [b.mxla, b.mxlo]], { padding: [60, 60] });
+  }
+
+  let msg;
+  if (applied) {
+    msg = `geowifi (${provider}): ${applied} de ${addrs.length} redes situadas `
+        + `(${done} procesados, ${queried} consultas${aborted && state.geowifiStop ? ", detenido" : ""}). `
+        + `Ubicaciones OSINT, no fixes GPS. Muchas MAC no están en las bases públicas.`;
+  } else {
+    msg = `geowifi no situó ninguna de las ${addrs.length} redes (${queried} consultas)`
+        + (lastErrors.length ? `. El servicio pudo no estar accesible (¿firewall/red?).`
+                             : `. Esas MAC no están en las bases públicas.`);
+  }
+  banner(msg, !applied);
+
+  state.geowifiRunning = false;
+  state.geowifiStop = false;
+  state.geowifiAbort = null;
+  hideGeowifiProgress();
+  updateGeowifiBtn();
 }
 
 // ---------- triangulación por RSSI (multilateración) ----------

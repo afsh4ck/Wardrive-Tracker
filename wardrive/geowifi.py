@@ -23,6 +23,7 @@ en línea con la convención del proyecto de lector pcap/PPI en Python puro.
 import os
 import struct
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .oui import lookup_vendor
 
@@ -223,8 +224,120 @@ def _cli_query(geowifi_dir, mac, timeout):
 # API pública
 # --------------------------------------------------------------------------
 
+def _entry_from_hit(hit, provider):
+    lat, lon, extra = hit
+    entry = {"lat": lat, "lon": lon, "module": "apple", "accuracy": None}
+    if provider == "geowifi-cli":
+        entry["module"] = extra
+    elif isinstance(extra, int):
+        entry["accuracy"] = extra
+    return entry
+
+
+def _default_workers():
+    """Nº de hilos concurrentes para las consultas (env GEOWIFI_WORKERS, 1..32)."""
+    try:
+        n = int(os.environ.get("GEOWIFI_WORKERS", "10"))
+    except ValueError:
+        n = 10
+    return max(1, min(32, n))
+
+
+def iter_locate_bssids(bssids, timeout=6.0, max_queries=None, workers=None):
+    """Geolocaliza BSSIDs **en paralelo** emitiendo progreso incremental (generador).
+
+    Procesa la lista por lotes; dentro de cada lote lanza hasta ``workers``
+    consultas concurrentes a Apple (el cuello de botella es la latencia de red,
+    no la CPU, así que los hilos escalan bien). El **caché de vecinos** se conserva
+    ENTRE lotes: una consulta devuelve ~100 BSSIDs cercanos, así que los lotes
+    siguientes resuelven muchos sin consulta propia. Por cada lote —y al final—
+    produce un dict::
+
+        {"done", "total", "found", "queried", "provider",
+         "located": {bssid: {...}},  # SOLO los nuevos desde el último evento
+         "errors": [...], "aborted": bool}
+
+    Salta MACs aleatorias/locales. Corta pronto si el servicio parece caído
+    (2 lotes seguidos con todas las consultas fallando y ningún resultado).
+    """
+    geowifi_dir = os.environ.get("GEOWIFI_DIR")
+    provider = "geowifi-cli" if geowifi_dir else "apple"
+    if max_queries is None:
+        max_queries = len(bssids)
+    if workers is None:
+        workers = _default_workers()
+    chunk = max(workers * 4, 20)   # varias "olas" de paralelismo por lote
+    total = len(bssids)
+
+    def query_one(norm):
+        if geowifi_dir:
+            return _cli_query(geowifi_dir, norm, timeout)
+        return _apple_query(norm, timeout)
+
+    cache = {}          # mac_normalizada -> (lat, lon, acc/module) | None
+    errors = []
+    queried = 0
+    found_total = 0
+    consec_error_batches = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for start in range(0, total, chunk):
+            batch = bssids[start:start + chunk]
+
+            # BSSIDs del lote que necesitan consulta: no aleatorios, no cacheados,
+            # dedup por MAC normalizada, respetando el tope de consultas.
+            to_query = {}   # norm -> raw
+            for raw in batch:
+                if lookup_vendor(raw) == "Randomized/Local":
+                    continue
+                norm = _norm_mac(raw)
+                if norm in cache or norm in to_query:
+                    continue
+                if queried + len(to_query) >= max_queries:
+                    break
+                to_query[norm] = raw
+
+            # Lanzar las consultas del lote en paralelo.
+            batch_errors = 0
+            if to_query:
+                futures = {pool.submit(query_one, norm): norm for norm in to_query}
+                for fut in as_completed(futures):
+                    norm = futures[fut]
+                    queried += 1
+                    try:
+                        found = fut.result()
+                        for mac, tup in found.items():
+                            cache[mac] = tup
+                        cache.setdefault(norm, None)
+                    except Exception as exc:  # red caída, timeout, endpoint no disponible…
+                        batch_errors += 1
+                        errors.append("%s: %s" % (norm, exc))
+
+            if to_query and batch_errors == len(to_query) and found_total == 0:
+                consec_error_batches += 1
+            else:
+                consec_error_batches = 0
+
+            # Resolver el lote desde el caché (incluye vecinos de lotes previos).
+            pending = {}
+            for raw in batch:
+                hit = cache.get(_norm_mac(raw))
+                if hit:
+                    pending[raw] = _entry_from_hit(hit, provider)
+                    found_total += 1
+
+            done = min(start + chunk, total)
+            aborted = consec_error_batches >= 2 and found_total == 0
+            yield {"done": done, "total": total, "found": found_total,
+                   "queried": queried, "provider": provider,
+                   "located": pending, "errors": errors[-3:], "aborted": aborted}
+            if aborted:
+                return
+            pending = {}
+
+
 def locate_bssids(bssids, timeout=8.0, max_queries=80):
-    """Geolocaliza una lista de BSSIDs.
+    """Geolocaliza una lista de BSSIDs (versión de una tacada, sin streaming).
 
     Devuelve::
 
@@ -236,54 +349,18 @@ def locate_bssids(bssids, timeout=8.0, max_queries=80):
           "errors":  [str, ...],
         }
 
-    Salta MACs aleatorias/locales (no están en las bases y son ruido de privacidad).
-    Cachea los vecinos devueltos por Apple para resolver varios BSSIDs por consulta.
+    Se apoya en :func:`iter_locate_bssids`; para grandes volúmenes con progreso,
+    usa el generador directamente (lo hace el endpoint ``/api/geolocate_stream``).
     """
-    geowifi_dir = os.environ.get("GEOWIFI_DIR")
-    provider = "geowifi-cli" if geowifi_dir else "apple"
-
-    results = {}
-    cache = {}          # mac_normalizada -> (lat, lon, acc/module) | None
-    errors = []
-    queried = 0
-
-    for raw_bssid in bssids:
-        if lookup_vendor(raw_bssid) == "Randomized/Local":
-            continue
-        norm = _norm_mac(raw_bssid)
-        if norm not in cache:
-            if queried >= max_queries:
-                break
-            try:
-                if geowifi_dir:
-                    found = _cli_query(geowifi_dir, norm, timeout)
-                else:
-                    found = _apple_query(norm, timeout)
-                queried += 1
-                for mac, tup in found.items():
-                    cache[mac] = tup
-                cache.setdefault(norm, None)
-            except Exception as exc:  # red caída, timeout, endpoint no disponible…
-                queried += 1
-                errors.append("%s: %s" % (norm, exc))
-                if len(errors) >= 3 and not results:
-                    break  # el servicio parece inaccesible; no insistir
-                continue
-
-        hit = cache.get(norm)
-        if hit:
-            lat, lon, extra = hit
-            entry = {"lat": lat, "lon": lon, "module": "apple", "accuracy": None}
-            if provider == "geowifi-cli":
-                entry["module"] = extra
-            elif isinstance(extra, int):
-                entry["accuracy"] = extra
-            results[raw_bssid] = entry
-
+    located = {}
+    last = {}
+    for ev in iter_locate_bssids(bssids, timeout=timeout, max_queries=max_queries):
+        located.update(ev.get("located") or {})
+        last = ev
     return {
-        "located": results,
-        "queried": queried,
-        "found": len(results),
-        "provider": provider,
-        "errors": errors,
+        "located": located,
+        "queried": last.get("queried", 0),
+        "found": len(located),
+        "provider": last.get("provider", "apple"),
+        "errors": last.get("errors", []),
     }

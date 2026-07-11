@@ -143,11 +143,13 @@ Funciona en dos escenarios:
   sustituyendo la posición sobre la carretera por la de la base pública —más cercana
   al emisor real— y conservando el punto original del recorrido para comparar.
 
-Con capturas grandes (miles de redes), la consulta se hace **por lotes** con una
-**barra de progreso** y un botón para **detener** en cualquier momento: se procesan
-todas las redes sin recortes y el mapa se va rellenando de forma incremental. Ten en
-cuenta que geolocalizar miles de BSSIDs son miles de consultas (puede tardar) y que
-**muchas MAC no están en las bases públicas** (sobre todo las aleatorias).
+Con capturas grandes (miles de redes), la consulta se hace en **streaming** (una
+sola pasada, para exprimir el caché de vecinos) con **consultas en paralelo** (pool
+de hilos), una **barra de progreso** y un botón para **detener** en cualquier
+momento: se procesan todas las redes sin recortes y el mapa se va rellenando de forma
+incremental. Ten en cuenta que **muchas MAC no están en las bases públicas** (sobre
+todo las aleatorias, que se omiten). El nº de hilos se ajusta con la variable de
+entorno `GEOWIFI_WORKERS` (por defecto 10; rango 1–32).
 
 > [!IMPORTANT]
 > Estas ubicaciones son **datos OSINT de un tercero, NO un fix GPS de tu captura**.
@@ -163,6 +165,7 @@ cuenta que geolocalizar miles de BSSIDs son miles de consultas (puede tardar) y 
 
   ```bash
   export GEOWIFI_DIR=/ruta/al/geowifi   # la app delegará en su CLI (-o json)
+  export GEOWIFI_WORKERS=16             # (opcional) hilos concurrentes, 1–32
   python app.py
   ```
 
@@ -211,12 +214,13 @@ python tools/make_sample.py
 
 ## 🔌 API
 
-| Método | Ruta             | Descripción                                                        |
-| ------ | ---------------- | ------------------------------------------------------------------ |
-| `GET`  | `/`              | Interfaz web.                                                      |
-| `POST` | `/api/upload`    | Sube un PCAP o log WigleWifi CSV (`multipart/form-data`, campo `file`) → JSON análisis. |
-| `GET`  | `/api/sample`    | Análisis de la captura de ejemplo, si existe.                      |
-| `POST` | `/api/geolocate` | Geolocaliza BSSIDs por geowifi. Body: `{"bssids": ["aa:bb:.."]}`.  |
+| Método | Ruta                    | Descripción                                                        |
+| ------ | ----------------------- | ------------------------------------------------------------------ |
+| `GET`  | `/`                     | Interfaz web.                                                      |
+| `POST` | `/api/upload`           | Sube un PCAP o log WigleWifi CSV (`multipart/form-data`, campo `file`) → JSON análisis. |
+| `GET`  | `/api/sample`           | Análisis de la captura de ejemplo, si existe.                      |
+| `POST` | `/api/geolocate`        | Geolocaliza BSSIDs por geowifi (una tacada). Body: `{"bssids": ["aa:bb:.."]}`. |
+| `POST` | `/api/geolocate_stream` | Igual pero en **streaming NDJSON** (una línea de progreso por lote); lo usa la UI para miles de redes. |
 
 Respuesta de `/api/geolocate`:
 
@@ -257,12 +261,13 @@ print(locate_bssids(["aa:bb:cc:dd:ee:ff"]))
 
 ```
 wardrive_tracker/
-├── app.py                  # Flask: / , /api/upload , /api/sample , /api/geolocate
+├── app.py                  # Flask: / , /api/upload , /api/sample , /api/geolocate(_stream)
 ├── wardrive/
 │   ├── parser.py           # PcapAnalyzer: disección 802.11 + BLE y agregación
 │   ├── wigle.py            # lector de logs WigleWifi CSV (.log/.csv/.txt) con GPS
 │   ├── ppi.py              # lector pcap clásico (sin scapy) + decoder PPI-GPS
-│   ├── geowifi.py          # geolocalización OSINT de BSSIDs (Apple / geowifi CLI)
+│   ├── geowifi.py          # geolocalización OSINT de BSSIDs (Apple / geowifi CLI),
+│   │                       #   en paralelo y con progreso en streaming
 │   └── oui.py              # lookup de fabricante por OUI
 ├── tools/make_sample.py    # generador de captura de ejemplo con GPS
 ├── templates/index.html    # interfaz (mapa Leaflet)
