@@ -19,8 +19,8 @@
     </div>
     <div class="actions">
       <label class="btn btn-primary">
-        <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap" hidden>
-        Subir PCAP
+        <input type="file" id="fileInput" accept=".pcap,.pcapng,.cap,.log,.csv,.txt" hidden>
+        Subir captura
       </label>
       <button class="btn" id="sampleBtn">Cargar ejemplo</button>
       <button class="btn btn-osint" id="geowifiBtn" hidden
@@ -45,7 +45,7 @@
       </div>
       <input type="search" id="filterInput" class="filter" placeholder="Filtrar por nombre, MAC, cifrado…">
       <div id="list" class="list">
-        <div class="empty">Sube un PCAP o carga el ejemplo para empezar.</div>
+        <div class="empty">Sube un PCAP o un log wardrive (.log/.csv), o carga el ejemplo para empezar.</div>
       </div>
     </aside>
 
@@ -55,8 +55,9 @@
       <div id="dropzone" class="dropzone">
         <div class="dz-inner">
           <div class="dz-icon">🛰️</div>
-          <h2>Arrastra un archivo PCAP aquí</h2>
-          <p>o usa <b>Subir PCAP</b>. ¿No tienes uno? Prueba <b>Cargar ejemplo</b>.</p>
+          <h2>Arrastra un PCAP o un log wardrive aquí</h2>
+          <p>PCAP (.pcap/.pcapng/.cap) o log WigleWifi CSV (.log/.csv/.txt). O usa
+             <b>Subir captura</b>. ¿No tienes ninguno? Prueba <b>Cargar ejemplo</b>.</p>
         </div>
       </div>
       <div id="loading" class="loading hidden"><div class="spinner"></div><span>Analizando captura…</span></div>

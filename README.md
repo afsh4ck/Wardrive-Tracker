@@ -2,11 +2,13 @@
 
 # 📡 Wardrive Tracker
 
-**Geolocaliza redes WiFi y dispositivos Bluetooth a partir de un archivo PCAP.**
+**Geolocaliza redes WiFi y dispositivos Bluetooth a partir de un PCAP o de un log
+wardrive (WigleWifi CSV).**
 
 <img width="2560" height="1238" alt="image" src="https://github.com/user-attachments/assets/6cc34e7c-afbb-4523-ab01-8aad69433266" />
 
-Sube una captura → parseo de tramas 802.11 / BLE → mapa interactivo con panel de
+Sube una captura **PCAP** o un **log WigleWifi CSV** (`.log`/`.csv`/`.txt`, p. ej.
+ESP32 Marauder) → parseo de tramas 802.11 / BLE → mapa interactivo con panel de
 detalles, cifrado, fabricante y traza de avistamientos. Sin GPS en la captura,
 geolocaliza los BSSIDs por bases de datos WiFi públicas con la técnica de
 [geowifi](https://github.com/GONZOsint/geowifi).
@@ -44,6 +46,9 @@ geolocaliza los BSSIDs por bases de datos WiFi públicas con la técnica de
 - 🛜 **Redes WiFi** desde tramas *beacon* / *probe response* 802.11:
   BSSID, SSID (incluye ocultas), canal, fabricante (OUI), RSSI, nº de paquetes y
   primer/último visto.
+- 📄 **Logs wardrive WigleWifi CSV** (`.log`/`.csv`/`.txt`): formato de exportación
+  de **ESP32 Marauder**, Kismet, WiGLE… Traen **GPS en cada fila**, así que
+  geolocalizan directamente sin necesidad de PPI-GPS ni geowifi.
 - 🔐 **Detección de cifrado**: `Open` · `WEP` · `WPA` · `WPA2` · `WPA3`
   (por IE RSN y AKM SAE).
 - 🔵 **Dispositivos Bluetooth LE** desde anuncios (`ADV_IND`, …):
@@ -63,21 +68,35 @@ geolocaliza los BSSIDs por bases de datos WiFi públicas con la técnica de
 ## 🔎 ¿Cómo funciona?
 
 ```
-PCAP ─▶ lector de registros ─▶ decode por link-type ─▶ extrae campos
-     ─▶ agrega por dispositivo ─▶ JSON ─▶ mapa Leaflet
+PCAP  ─▶ lector de registros ─▶ decode por link-type ─▶ extrae campos ─┐
+                                                                       ├─▶ agrega por dispositivo ─▶ JSON ─▶ mapa Leaflet
+log CSV ─▶ WigleWifi CSV ─▶ fila = MAC/SSID/cifrado/RSSI/GPS ──────────┘
 ```
 
-Cada trama se decodifica según su *link-type* (PPI, radiotap, 802.11 crudo o
-BLE LL), se extraen sus campos (BSSID/SSID/canal/cifrado/GPS o BD_ADDR/nombre) y
-se **agrega por dispositivo** acumulando todos sus avistamientos y su mejor fix.
+**PCAP:** cada trama se decodifica según su *link-type* (PPI, radiotap, 802.11
+crudo o BLE LL), se extraen sus campos (BSSID/SSID/canal/cifrado/GPS o
+BD_ADDR/nombre).
+
+**Log WigleWifi CSV:** cada fila ya es un avistamiento con MAC, SSID, `AuthMode`
+(→ cifrado), RSSI, canal, timestamp y **coordenadas GPS**.
+
+En ambos casos se **agrega por dispositivo** acumulando todos sus avistamientos y
+su mejor fix (el de mayor señal). La ruta de subida detecta el formato por la
+extensión y por el contenido, así que da igual si el log llega como `.log`, `.csv`
+o `.txt`.
 
 ---
 
 ## ⚠️ El GPS y las capturas — importante
 
-Una captura WiFi/BT **normal no contiene coordenadas**. Para geolocalizar con GPS
-real, la captura debe incluir etiquetas **PPI-GPS** (estándar *PPI-GEOLOCATION*),
-que generan las herramientas de wardriving con fuente GPS:
+> [!TIP]
+> Esto solo afecta a los **PCAP**. Si subes un **log WigleWifi CSV**
+> (`.log`/`.csv`/`.txt`), el GPS ya viene en cada fila y todo se sitúa en el mapa
+> directamente, sin nada de lo de abajo.
+
+Una captura PCAP WiFi/BT **normal no contiene coordenadas**. Para geolocalizar con
+GPS real, la captura debe incluir etiquetas **PPI-GPS** (estándar
+*PPI-GEOLOCATION*), que generan las herramientas de wardriving con fuente GPS:
 
 | Herramienta      | Cómo                              |
 | ---------------- | --------------------------------- |
@@ -140,11 +159,13 @@ python app.py
 # abre http://127.0.0.1:5000
 ```
 
-1. Pulsa **Subir PCAP** (o arrastra el archivo sobre el mapa).
+1. Pulsa **Subir captura** (o arrastra el archivo sobre el mapa): PCAP
+   (`.pcap`/`.pcapng`/`.cap`) o log WigleWifi CSV (`.log`/`.csv`/`.txt`).
 2. Explora la lista lateral: pestañas **WiFi / Bluetooth** con filtro por nombre,
    MAC, cifrado o fabricante.
 3. Haz clic en una red/dispositivo o en un marcador para ver sus detalles y traza.
-4. ¿Sin GPS? Pulsa **Geolocalizar BSSIDs (geowifi)** para situar las redes por OSINT.
+4. ¿PCAP sin GPS? Pulsa **Geolocalizar BSSIDs (geowifi)** para situar las redes por
+   OSINT. (Los logs WigleWifi ya traen GPS, así que no lo necesitan.)
 
 ### ¿No tienes una captura con GPS?
 
@@ -162,7 +183,7 @@ python tools/make_sample.py
 | Método | Ruta             | Descripción                                                        |
 | ------ | ---------------- | ------------------------------------------------------------------ |
 | `GET`  | `/`              | Interfaz web.                                                      |
-| `POST` | `/api/upload`    | Sube un PCAP (`multipart/form-data`, campo `file`) → JSON análisis. |
+| `POST` | `/api/upload`    | Sube un PCAP o log WigleWifi CSV (`multipart/form-data`, campo `file`) → JSON análisis. |
 | `GET`  | `/api/sample`    | Análisis de la captura de ejemplo, si existe.                      |
 | `POST` | `/api/geolocate` | Geolocaliza BSSIDs por geowifi. Body: `{"bssids": ["aa:bb:.."]}`.  |
 
@@ -190,6 +211,10 @@ print(result["meta"])              # resumen: contadores, bounds, has_gps…
 for ap in result["wifi"]:          # redes WiFi
     print(ap["addr"], ap["name"], ap["encryption"], ap["location"])
 
+# Logs WigleWifi CSV (ESP32 Marauder, Kismet, WiGLE…) — mismo dict de salida
+from wardrive.wigle import analyze_wigle
+result = analyze_wigle("wardrive.log")
+
 # Geolocalización OSINT de BSSIDs (técnica de geowifi)
 from wardrive.geowifi import locate_bssids
 print(locate_bssids(["aa:bb:cc:dd:ee:ff"]))
@@ -204,6 +229,7 @@ wardrive_tracker/
 ├── app.py                  # Flask: / , /api/upload , /api/sample , /api/geolocate
 ├── wardrive/
 │   ├── parser.py           # PcapAnalyzer: disección 802.11 + BLE y agregación
+│   ├── wigle.py            # lector de logs WigleWifi CSV (.log/.csv/.txt) con GPS
 │   ├── ppi.py              # lector pcap clásico (sin scapy) + decoder PPI-GPS
 │   ├── geowifi.py          # geolocalización OSINT de BSSIDs (Apple / geowifi CLI)
 │   └── oui.py              # lookup de fabricante por OUI
@@ -225,9 +251,12 @@ wardrive_tracker/
 
 ## 🧬 Formatos y enlaces de capa soportados
 
-- **Entrada:** `.pcap`, `.pcapng`, `.cap` (hasta 200 MB).
-- **Link-types:** PPI (192), radiotap (127), 802.11 crudo (105), BLE LL (251/256).
-- **GPS:** solo desde capturas **PPI clásicas** (PPI-GEOLOCATION, tipo 30002).
+- **Entrada:** `.pcap`, `.pcapng`, `.cap` y logs **WigleWifi CSV** `.log`, `.csv`,
+  `.txt` (hasta 200 MB).
+- **Link-types (PCAP):** PPI (192), radiotap (127), 802.11 crudo (105), BLE LL
+  (251/256).
+- **GPS:** desde capturas **PPI clásicas** (PPI-GEOLOCATION, tipo 30002) o desde
+  cualquier fila de un **log WigleWifi CSV**.
 
 ---
 

@@ -17,11 +17,23 @@ from flask import Flask, jsonify, render_template, request
 from wardrive import geowifi
 from wardrive.parser import analyze_pcap
 from wardrive.ppi import PcapFormatError
+from wardrive.wigle import analyze_wigle, looks_like_wigle
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB cap
 
-ALLOWED_EXT = {".pcap", ".pcapng", ".cap"}
+PCAP_EXT = {".pcap", ".pcapng", ".cap"}
+WIGLE_EXT = {".log", ".csv", ".txt"}
+ALLOWED_EXT = PCAP_EXT | WIGLE_EXT
+
+
+def _is_wigle_file(path):
+    """Comprueba por contenido si un archivo es un log WigleWifi CSV."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return looks_like_wigle(fh.read(4096))
+    except OSError:
+        return False
 
 
 @app.route("/")
@@ -38,17 +50,27 @@ def upload():
         return jsonify({"error": "Nombre de archivo vacío."}), 400
     ext = os.path.splitext(f.filename)[1].lower()
     if ext not in ALLOWED_EXT:
-        return jsonify({"error": "Formato no soportado. Usa .pcap, .pcapng o .cap"}), 400
+        return jsonify({"error": "Formato no soportado. Usa .pcap/.pcapng/.cap "
+                                 "o un log wardrive .log/.csv/.txt (WigleWifi CSV)."}), 400
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
     try:
         f.save(tmp.name)
         tmp.close()
-        result = analyze_pcap(tmp.name)
+
+        # Rutas de texto (.log/.csv/.txt) -> WigleWifi CSV; binarias -> PCAP.
+        # Para .csv/.txt/.log confirmamos con una lectura de cabecera por si el
+        # usuario pone la extensión equivocada.
+        if ext in WIGLE_EXT or _is_wigle_file(tmp.name):
+            result = analyze_wigle(tmp.name)
+        else:
+            result = analyze_pcap(tmp.name)
         result["meta"]["filename"] = f.filename
         return jsonify(result)
     except PcapFormatError as exc:
         return jsonify({"error": "El archivo no es un PCAP válido: %s" % exc}), 400
+    except ValueError as exc:
+        return jsonify({"error": "El log wardrive no es válido: %s" % exc}), 400
     except Exception as exc:  # pragma: no cover
         traceback.print_exc()
         return jsonify({"error": "Error al analizar el archivo: %s" % exc}), 500
