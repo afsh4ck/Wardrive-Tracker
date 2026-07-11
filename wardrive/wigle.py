@@ -117,6 +117,9 @@ def analyze_wigle(path):
         ts = _parse_ts(row.get("FirstSeen"))
         lat = _to_float(row.get("CurrentLatitude"))
         lon = _to_float(row.get("CurrentLongitude"))
+        acc = _to_float(row.get("AccuracyMeters"))
+        if acc is not None and acc <= 0:
+            acc = None
         if lat is None or lon is None or (lat == 0.0 and lon == 0.0) \
            or abs(lat) > 90 or abs(lon) > 180:
             lat = lon = None
@@ -129,7 +132,7 @@ def analyze_wigle(path):
             if ssid and dev.name is None:
                 dev.name = ssid
             dev.encryption = _enc_from_authmode(row.get("AuthMode"))
-            dev.add(ts, rssi, lat, lon, channel)
+            dev.add(ts, rssi, lat, lon, channel, acc)
         elif typ in ("BLE", "BT"):
             dev = bluetooth.get(mac)
             if dev is None:
@@ -139,7 +142,7 @@ def analyze_wigle(path):
                 dev.name = ssid
             if dev.device_type is None:
                 dev.device_type = "BLE" if typ == "BLE" else "BT Classic"
-            dev.add(ts, rssi, lat, lon, None)
+            dev.add(ts, rssi, lat, lon, None, acc)
         else:
             # Torres de telefonía (GSM/LTE/NR...) u otros: se ignoran.
             continue

@@ -14,6 +14,7 @@ absent, is left empty (the device still appears in the inventory).
 """
 
 import logging
+import math
 
 from scapy.all import Dot11, Dot11Beacon, Dot11ProbeResp, Dot11Elt, RadioTap
 
@@ -38,14 +39,45 @@ except Exception:  # pragma: no cover - depends on scapy build
 class Sighting:
     """One observation of a device, optionally with a GPS fix."""
 
-    __slots__ = ("ts", "signal", "lat", "lon", "channel")
+    __slots__ = ("ts", "signal", "lat", "lon", "channel", "accuracy")
 
-    def __init__(self, ts, signal, lat, lon, channel):
+    def __init__(self, ts, signal, lat, lon, channel, accuracy=None):
         self.ts = ts
         self.signal = signal
         self.lat = lat
         self.lon = lon
         self.channel = channel
+        self.accuracy = accuracy   # GPS horizontal accuracy in metres, if known
+
+
+def _uncertainty_m(best_signal, sightings):
+    """Radio de incertidumbre (m) de la posición estimada de un emisor.
+
+    Un fix de wardriving es la posición del *escáner*, no la del emisor: sitúa el
+    dispositivo en el punto del recorrido donde se pasó más cerca, no en el
+    edificio real. Este radio comunica esa incertidumbre de forma honesta.
+
+    - Con señal: se deriva del RSSI más fuerte por el modelo log-distancia de
+      pérdida de propagación (ref -40 dBm, exponente 3) -> distancia aproximada
+      del paso más cercano al emisor.
+    - Sin señal: dispersión espacial de los avistamientos respecto al centroide.
+
+    Se aplica un suelo por la precisión GPS reportada, con mínimo 10 m y tope 300 m.
+    """
+    acc = [s.accuracy for s in sightings if s.accuracy]
+    floor = max(acc) if acc else 10.0
+    if best_signal is not None:
+        r = 10.0 ** ((-40.0 - best_signal) / 30.0)
+    elif len(sightings) >= 2:
+        clat = sum(s.lat for s in sightings) / len(sightings)
+        clon = sum(s.lon for s in sightings) / len(sightings)
+        mlat = 111320.0
+        mlon = 111320.0 * math.cos(math.radians(clat))
+        r = math.sqrt(sum(((s.lon - clon) * mlon) ** 2 + ((s.lat - clat) * mlat) ** 2
+                          for s in sightings) / len(sightings))
+    else:
+        r = floor
+    return round(min(max(r, floor, 10.0), 300.0), 1)
 
 
 class Device:
@@ -65,7 +97,7 @@ class Device:
         self.best_signal = None
         self.sightings = []
 
-    def add(self, ts, signal, lat, lon, channel):
+    def add(self, ts, signal, lat, lon, channel, accuracy=None):
         self.packets += 1
         if ts is not None:
             self.first_seen = ts if self.first_seen is None else min(self.first_seen, ts)
@@ -75,24 +107,39 @@ class Device:
         if channel is not None:
             self.channel = channel
         if lat is not None and lon is not None:
-            self.sightings.append(Sighting(ts, signal, lat, lon, channel))
+            self.sightings.append(Sighting(ts, signal, lat, lon, channel, accuracy))
 
     def location(self):
         """
-        Best position estimate. Uses the sighting with the strongest signal
-        (closest pass); falls back to a signal-weighted centroid, then to a
-        plain centroid when no signal info is available.
+        Best position estimate with an uncertainty radius (``radius_m``).
+
+        When signal is available we take the **RSSI-weighted centroid**: each
+        sighting is weighted by its linear power (``10**(dBm/10)``), so the
+        strongest (closest) passes dominate and pull the estimate toward the
+        nearest-approach point instead of trusting a single, possibly noisy,
+        strongest sample. With no signal we fall back to a plain centroid.
+
+        The estimate is still constrained to *where the scanner drove*; the true
+        emitter can be up to ``radius_m`` away (use geowifi to place it on its
+        actual building). See :func:`_uncertainty_m`.
         """
         located = [s for s in self.sightings if s.lat is not None]
         if not located:
             return None
         with_sig = [s for s in located if s.signal is not None]
         if with_sig:
-            best = max(with_sig, key=lambda s: s.signal)
-            return {"lat": best.lat, "lon": best.lon, "source": "best-signal"}
+            weights = [10.0 ** (s.signal / 10.0) for s in with_sig]
+            wsum = sum(weights) or 1.0
+            lat = sum(w * s.lat for w, s in zip(weights, with_sig)) / wsum
+            lon = sum(w * s.lon for w, s in zip(weights, with_sig)) / wsum
+            best = max(s.signal for s in with_sig)
+            source = "weighted-centroid" if len(with_sig) > 1 else "best-signal"
+            return {"lat": lat, "lon": lon, "source": source,
+                    "radius_m": _uncertainty_m(best, located)}
         lat = sum(s.lat for s in located) / len(located)
         lon = sum(s.lon for s in located) / len(located)
-        return {"lat": lat, "lon": lon, "source": "centroid"}
+        return {"lat": lat, "lon": lon, "source": "centroid",
+                "radius_m": _uncertainty_m(None, located)}
 
     def to_dict(self):
         loc = self.location()
