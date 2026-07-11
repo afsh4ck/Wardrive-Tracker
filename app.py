@@ -92,9 +92,12 @@ def geolocate():
     bssids = payload.get("bssids")
     if not isinstance(bssids, list) or not bssids:
         return jsonify({"error": "No se han enviado BSSIDs."}), 400
-    bssids = [str(b).lower() for b in bssids if b][:250]
+    # Un lote grande por petición: el frontend trocea listas enormes (miles de
+    # redes) en varias llamadas. `max_queries` == tamaño del lote para intentar
+    # TODOS los BSSIDs del lote (el caché de vecinos de Apple evita repetir).
+    bssids = [str(b).lower() for b in bssids if b][:500]
     try:
-        return jsonify(geowifi.locate_bssids(bssids))
+        return jsonify(geowifi.locate_bssids(bssids, max_queries=len(bssids)))
     except Exception as exc:  # pragma: no cover
         traceback.print_exc()
         return jsonify({"error": "Error en la geolocalización: %s" % exc}), 500

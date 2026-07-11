@@ -143,6 +143,12 @@ Funciona en dos escenarios:
   sustituyendo la posición sobre la carretera por la de la base pública —más cercana
   al emisor real— y conservando el punto original del recorrido para comparar.
 
+Con capturas grandes (miles de redes), la consulta se hace **por lotes** con una
+**barra de progreso** y un botón para **detener** en cualquier momento: se procesan
+todas las redes sin recortes y el mapa se va rellenando de forma incremental. Ten en
+cuenta que geolocalizar miles de BSSIDs son miles de consultas (puede tardar) y que
+**muchas MAC no están en las bases públicas** (sobre todo las aleatorias).
+
 > [!IMPORTANT]
 > Estas ubicaciones son **datos OSINT de un tercero, NO un fix GPS de tu captura**.
 > Se muestran con un **marcador hueco a trazos** y un aviso en el panel de detalle

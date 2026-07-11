@@ -169,6 +169,23 @@ body {
 
 .hidden { display: none !important; }
 
+.progress {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 20px; background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.progress .pbar {
+  flex: 1; height: 8px; border-radius: 5px; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.progress .pbar > i {
+  display: block; height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: width .3s ease;
+}
+.progress .ptext { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.spinner.sm { width: 16px; height: 16px; border-width: 2px; }
+
 .legend {
   position: absolute; bottom: 14px; left: 14px; z-index: 550;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
