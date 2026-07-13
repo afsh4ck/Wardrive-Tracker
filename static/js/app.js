@@ -798,6 +798,28 @@ function wire() {
     });
   });
 
+  const sidebar = document.querySelector(".sidebar");
+  const sbToggle = document.getElementById("sidebarToggle");
+  const syncSbToggle = () => {
+    const collapsed = sidebar.classList.contains("collapsed");
+    sbToggle.textContent = collapsed ? "▸" : "◂";
+    const label = collapsed ? "Expandir panel" : "Colapsar panel";
+    sbToggle.title = label;
+    sbToggle.setAttribute("aria-label", label);
+  };
+  sbToggle.addEventListener("click", () => {
+    sidebar.classList.toggle("collapsed");
+    localStorage.setItem("sidebarCollapsed", sidebar.classList.contains("collapsed") ? "1" : "0");
+    syncSbToggle();
+    // Leaflet no detecta el cambio de tamaño del contenedor; esperar a la transición.
+    setTimeout(() => map.invalidateSize(), 280);
+  });
+  if (localStorage.getItem("sidebarCollapsed") === "1") {
+    sidebar.classList.add("collapsed");
+    map.invalidateSize();
+  }
+  syncSbToggle();
+
   const dz = document.getElementById("dropzone");
   const mapwrap = document.querySelector(".mapwrap");
   ["dragenter", "dragover"].forEach(ev =>

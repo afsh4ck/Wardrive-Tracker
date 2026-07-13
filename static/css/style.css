@@ -12,7 +12,22 @@
   --wpa: #38e1b0;
   --wpa3: #4aa3ff;
   --bt: #b07aff;
+  --scroll-thumb: #2e3a58;
+  --scroll-thumb-hover: #3d4d75;
 }
+
+/* Scrollbars oscuros. Las propiedades estándar cubren Firefox y Chromium
+   modernos; el bloque -webkit- es el fallback para Safari y Chromium viejos
+   (si el navegador soporta scrollbar-color, ignora los pseudo-elementos). */
+* { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb); border-radius: 8px;
+  border: 2px solid var(--panel); background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -68,7 +83,20 @@ body {
 .sidebar {
   width: 340px; background: var(--panel); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; min-height: 0;
+  transition: margin-left .25s ease;
 }
+/* Colapsa deslizando fuera del layout: el ancho no cambia y el contenido
+   no se reajusta durante la animación. */
+.sidebar.collapsed { margin-left: -340px; }
+
+.sbtoggle {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  z-index: 650; width: 18px; height: 56px; padding: 0;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--border); border-left: none;
+  border-radius: 0 8px 8px 0; cursor: pointer; font-size: 11px; line-height: 1;
+}
+.sbtoggle:hover { color: var(--text); border-color: var(--accent); }
 .tabs { display: flex; border-bottom: 1px solid var(--border); }
 .tab {
   flex: 1; padding: 12px; background: none; border: none; color: var(--muted);
